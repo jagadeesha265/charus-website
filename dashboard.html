@@ -1,0 +1,434 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Charu's | Admin Dashboard</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#100d0c;color:#f8eee8;font-family:Arial,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 5%;background:#1b1614;border-bottom:1px solid #70533f}
+header h1{margin:0;color:#d5aa83;font-size:24px}
+header p{margin:6px 0 0;color:#c0b1a8;font-size:13px}
+button{padding:10px 14px;border:0;border-radius:7px;cursor:pointer;font-weight:bold}
+button:disabled{opacity:.6;cursor:wait}
+.logout,.upload-btn{background:#c69b74;color:#17110d}
+main{width:min(1400px,94%);margin:30px auto}
+.summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:24px}
+.card,.panel{padding:20px;background:#1b1614;border:1px solid #59483c;border-radius:12px;margin-bottom:24px}
+.card p{margin:0 0 10px;color:#c0b1a8;font-size:14px}
+.card strong{font-size:28px;color:#d5aa83}
+.panel-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}
+h2{margin:0;font-size:20px}
+h3{color:#d5aa83}
+.refresh{background:#3a2c23;color:#f8eee8;border:1px solid #70533f}
+#message,.image-message{color:#d5aa83;font-size:14px;line-height:1.5}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:1000px}
+th,td{padding:13px 12px;border-bottom:1px solid #40332b;text-align:left;font-size:14px;white-space:nowrap}
+th{color:#d5aa83}
+.status{display:inline-block;padding:5px 9px;border-radius:20px;background:#3a2c23;color:#f0c9a6;font-size:12px}
+.confirm-btn{background:#527d57;color:white}
+.cancel-btn,.delete-btn{background:#8b4141;color:white}
+.image-btn{background:#c69b74;color:#17110d}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+.image-form{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:16px 0}
+.image-form input[type=file]{max-width:100%;color:#eee2da}
+.image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+.image-card{background:#100d0c;border:1px solid #59483c;border-radius:10px;padding:10px;min-width:0}
+.image-card img{display:block;width:100%;height:180px;object-fit:cover;border-radius:7px}
+.image-card p{font-size:13px;overflow-wrap:anywhere;color:#d5aa83}
+.image-card button{width:100%}
+.hint{color:#c0b1a8;font-size:13px;line-height:1.5}
+@media(max-width:650px){
+ header{align-items:flex-start;padding:18px 4%}
+ header h1{font-size:20px}
+ .summary{grid-template-columns:1fr}
+ .panel,.card{padding:14px}
+ main{width:94%}
+ .panel-heading{align-items:flex-start}
+}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Charu's Admin</h1><p>Bookings and website images</p></div>
+  <button class="logout" id="logoutButton">Log Out</button>
+</header>
+
+<main>
+  <section class="summary">
+    <div class="card"><p>Total bookings</p><strong id="totalCount">—</strong></div>
+    <div class="card"><p>Pending bookings</p><strong id="pendingCount">—</strong></div>
+    <div class="card"><p>Confirmed bookings</p><strong id="confirmedCount">—</strong></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading">
+      <h2>Manage My Works</h2>
+      <button class="refresh" onclick="loadImages()">Refresh</button>
+    </div>
+    <p class="hint">Upload photos of your completed saree pleating and mehndi work.</p>
+    <form class="image-form" id="worksForm">
+      <input type="file" name="images" accept="image/jpeg,image/png,image/webp" multiple required>
+      <button class="upload-btn" type="submit">Upload to My Works</button>
+    </form>
+    <p class="image-message" id="worksMessage" role="status"></p>
+    <div class="image-grid" id="worksGrid"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading">
+      <h2>Manage Gallery</h2>
+      <button class="refresh" onclick="loadImages()">Refresh</button>
+    </div>
+    <p class="hint">Upload photos that you want to show in your website's Gallery section.</p>
+    <form class="image-form" id="galleryForm">
+      <input type="file" name="images" accept="image/jpeg,image/png,image/webp" multiple required>
+      <button class="upload-btn" type="submit">Upload to Gallery</button>
+    </form>
+    <p class="image-message" id="galleryMessage" role="status"></p>
+    <div class="image-grid" id="galleryGrid"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading">
+      <h2>Customer Bookings</h2>
+      <button class="refresh" id="refreshButton">Refresh</button>
+    </div>
+    <p id="message" role="status" aria-live="polite">Checking admin session...</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Customer</th><th>Phone</th><th>Service</th><th>Date</th>
+          <th>Time</th><th>Quantity</th><th>Status</th>
+          <th>Reference Image</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="bookingRows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const API_URL = "http://127.0.0.1:5000/api";
+const rows = document.getElementById("bookingRows");
+const message = document.getElementById("message");
+const imageApi = `${API_URL}/site-images`;
+
+async function apiFetch(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: "include",
+    ...options
+  });
+
+  if (response.status === 401) {
+    window.location.href = "admin.html";
+    throw new Error("Admin session expired. Please log in again.");
+  }
+  return response;
+}
+
+function addCell(row, value) {
+  const cell = document.createElement("td");
+  cell.textContent = value == null || value === "" ? "—" : value;
+  row.appendChild(cell);
+  return cell;
+}
+
+async function uploadImages(event, category) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const input = form.querySelector('input[type="file"]');
+  const button = form.querySelector("button[type='submit']");
+  const status = document.getElementById(
+    category === "works" ? "worksMessage" : "galleryMessage"
+  );
+
+  if (!input.files.length) {
+    status.textContent = "Please select one or more images.";
+    return;
+  }
+
+  if (input.files.length > 10) {
+    status.textContent = "Please upload no more than 10 images at once.";
+    return;
+  }
+
+  for (const file of input.files) {
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      status.textContent = "Use JPG, PNG or WebP images only.";
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      status.textContent = `${file.name} is larger than 5 MB.`;
+      return;
+    }
+  }
+
+  const data = new FormData();
+  data.append("category", category);
+  for (const file of input.files) data.append("images", file);
+
+  button.disabled = true;
+  status.textContent = "Uploading images...";
+
+  try {
+    const response = await apiFetch(`${imageApi}/upload`, {
+      method: "POST",
+      body: data
+    });
+    const result = await response.json();
+
+    if (!response.ok) throw new Error(result.message || "Upload failed.");
+
+    status.textContent = result.message;
+    form.reset();
+    await loadImages();
+  } catch (error) {
+    status.textContent = error.message || "Could not upload images.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function makeImageCard(item) {
+  const card = document.createElement("div");
+  card.className = "image-card";
+
+  const img = document.createElement("img");
+  img.alt = item.filename || "Uploaded website image";
+  img.loading = "lazy";
+  img.src = `${imageApi}/image/${encodeURIComponent(item._id)}`;
+
+  const name = document.createElement("p");
+  name.textContent = item.filename || "Uploaded image";
+
+  const del = document.createElement("button");
+  del.className = "delete-btn";
+  del.textContent = "Delete image";
+  del.addEventListener("click", async () => {
+    if (!confirm("Delete this image from the website?")) return;
+
+    del.disabled = true;
+    try {
+      const response = await apiFetch(
+        `${imageApi}/${encodeURIComponent(item._id)}`,
+        { method: "DELETE" }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Delete failed.");
+      await loadImages();
+    } catch (error) {
+      alert(error.message || "Could not delete image.");
+      del.disabled = false;
+    }
+  });
+
+  card.append(img, name, del);
+  return card;
+}
+
+async function loadImages() {
+  document.getElementById("worksMessage").textContent = "Loading images...";
+  document.getElementById("galleryMessage").textContent = "Loading images...";
+
+  try {
+    const response = await apiFetch(imageApi);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || "Could not load images.");
+
+    const worksGrid = document.getElementById("worksGrid");
+    const galleryGrid = document.getElementById("galleryGrid");
+    worksGrid.replaceChildren();
+    galleryGrid.replaceChildren();
+
+    const works = (result.images || []).filter(x => x.category === "works");
+    const gallery = (result.images || []).filter(x => x.category === "gallery");
+
+    works.forEach(item => worksGrid.appendChild(makeImageCard(item)));
+    gallery.forEach(item => galleryGrid.appendChild(makeImageCard(item)));
+
+    document.getElementById("worksMessage").textContent =
+      `${works.length} My Works image(s).`;
+    document.getElementById("galleryMessage").textContent =
+      `${gallery.length} Gallery image(s).`;
+  } catch (error) {
+    document.getElementById("worksMessage").textContent = error.message;
+    document.getElementById("galleryMessage").textContent = error.message;
+  }
+}
+
+async function updateBookingStatus(id, status) {
+  const action = status === "Confirmed" ? "confirm" : "cancel";
+  if (!confirm(`Are you sure you want to ${action} this booking?`)) return;
+
+  try {
+    const response = await apiFetch(
+      `${API_URL}/bookings/admin/${id}/status`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      }
+    );
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || "Could not update booking.");
+    await loadBookings();
+    message.textContent = result.message || "Booking updated.";
+  } catch (error) {
+    message.textContent = error.message;
+  }
+}
+
+async function viewReferenceImage(id, button) {
+  const viewer = window.open("", "_blank");
+  if (!viewer) {
+    alert("Please allow pop-ups for this site and try again.");
+    return;
+  }
+
+  viewer.document.body.textContent = "Loading image...";
+  const oldText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Loading...";
+
+  try {
+    const response = await apiFetch(
+      `${API_URL}/bookings/admin/${id}/reference-image`,
+      { cache: "no-store" }
+    );
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.message || "Could not load reference image.");
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    viewer.document.body.replaceChildren();
+
+    const img = viewer.document.createElement("img");
+    img.src = url;
+    img.alt = "Customer reference image";
+    img.style.cssText = "max-width:95%;max-height:90vh;display:block;margin:20px auto";
+    viewer.document.body.style.cssText =
+      "margin:0;background:#100d0c;text-align:center;padding:20px";
+    viewer.document.body.appendChild(img);
+    viewer.addEventListener("beforeunload", () => URL.revokeObjectURL(url), { once: true });
+  } catch (error) {
+    if (!viewer.closed) viewer.document.body.textContent = error.message;
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = oldText;
+  }
+}
+
+async function loadBookings() {
+  message.textContent = "Loading bookings...";
+  rows.replaceChildren();
+
+  try {
+    const sessionResponse = await apiFetch(`${API_URL}/auth/me`);
+    if (!sessionResponse.ok) throw new Error("Could not verify admin session.");
+
+    const response = await apiFetch(`${API_URL}/bookings/admin/all`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || "Could not load bookings.");
+
+    const bookings = result.bookings || [];
+    document.getElementById("totalCount").textContent = bookings.length;
+    document.getElementById("pendingCount").textContent =
+      bookings.filter(b => b.status === "Pending").length;
+    document.getElementById("confirmedCount").textContent =
+      bookings.filter(b => b.status === "Confirmed").length;
+
+    for (const booking of bookings) {
+      const row = document.createElement("tr");
+      addCell(row, booking.customerName);
+      addCell(row, booking.phone);
+      addCell(row, booking.service);
+      addCell(row, booking.bookingDate);
+      addCell(row, booking.bookingTime);
+      addCell(row, booking.quantity);
+
+      const statusCell = addCell(row, "");
+      const status = document.createElement("span");
+      status.className = "status";
+      status.textContent = booking.status || "Pending";
+      statusCell.appendChild(status);
+
+      const imageCell = addCell(row, "");
+      if (booking.referenceImageId) {
+        const btn = document.createElement("button");
+        btn.className = "image-btn";
+        btn.textContent = "View Reference Image";
+        btn.addEventListener("click", () => viewReferenceImage(booking._id, btn));
+        imageCell.appendChild(btn);
+      } else {
+        imageCell.textContent = "No reference image";
+      }
+
+      const actionCell = addCell(row, "");
+      const box = document.createElement("div");
+      box.className = "actions";
+
+      if (booking.status === "Pending") {
+        const confirmBtn = document.createElement("button");
+        confirmBtn.className = "confirm-btn";
+        confirmBtn.textContent = "Confirm";
+        confirmBtn.addEventListener("click", () =>
+          updateBookingStatus(booking._id, "Confirmed")
+        );
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.className = "cancel-btn";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.addEventListener("click", () =>
+          updateBookingStatus(booking._id, "Cancelled")
+        );
+        box.append(confirmBtn, cancelBtn);
+      } else {
+        box.textContent = "—";
+      }
+
+      actionCell.appendChild(box);
+      rows.appendChild(row);
+    }
+
+    message.textContent = bookings.length
+      ? `Showing ${bookings.length} booking(s).`
+      : "No bookings found yet.";
+  } catch (error) {
+    message.textContent = error.message || "Could not connect to the server.";
+  }
+}
+
+document.getElementById("worksForm").addEventListener(
+  "submit", event => uploadImages(event, "works")
+);
+document.getElementById("galleryForm").addEventListener(
+  "submit", event => uploadImages(event, "gallery")
+);
+document.getElementById("refreshButton").addEventListener("click", loadBookings);
+document.getElementById("logoutButton").addEventListener("click", async () => {
+  try {
+    await fetch(`${API_URL}/auth/logout`, {
+      method: "POST",
+      credentials: "include"
+    });
+  } finally {
+    window.location.href = "admin.html";
+  }
+});
+
+async function initializeDashboard() {
+  await loadBookings();
+  await loadImages();
+}
+initializeDashboard();
+</script>
+</body>
+</html>

@@ -1892,3 +1892,19 @@ section h2 {
         font-size: 20px;
     }
 }
+
+/* Display existing and admin-uploaded My Works images */
+#my-works .works-grid .work-item {
+    overflow: hidden;
+    min-width: 0;
+}
+
+#my-works .works-grid .work-item img {
+    display: block;
+    width: 100%;
+    height: 360px;
+    object-fit: cover;
+    object-position: center;
+    opacity: 1;
+    visibility: visible;
+}

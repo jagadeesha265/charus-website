@@ -1,0 +1,208 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Charu's | Admin Login</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            background: #100d0c;
+            color: #f8eee8;
+            font-family: Arial, sans-serif;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+            padding: 36px 28px;
+            border: 1px solid #8c684d;
+            border-radius: 16px;
+            background: #1b1614;
+            box-shadow: 0 12px 40px #0005;
+        }
+
+        .brand {
+            color: #d5aa83;
+            text-align: center;
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 22px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #c0b1a8;
+            font-size: 14px;
+            margin-bottom: 28px;
+        }
+
+        label {
+            display: block;
+            margin: 16px 0 8px;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 13px;
+            color: white;
+            background: #100d0c;
+            border: 1px solid #59483c;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        input:focus {
+            outline: 2px solid #c69b74;
+            outline-offset: 1px;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 24px;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            background: #c69b74;
+            color: #17110d;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.65;
+            cursor: wait;
+        }
+
+        #message {
+            margin-top: 16px;
+            font-size: 14px;
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        .back-link {
+            display: block;
+            margin-top: 22px;
+            color: #d5aa83;
+            text-align: center;
+            text-decoration: none;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <main class="login-card">
+        <div class="brand">Charu's</div>
+        <h1>Admin Login</h1>
+        <p class="subtitle">Sign in to manage your bookings and services.</p>
+
+        <form id="loginForm">
+            <label for="username">Username</label>
+            <input
+                id="username"
+                name="username"
+                type="text"
+                autocomplete="username"
+                required
+            >
+
+            <label for="password">Password</label>
+            <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+            >
+
+            <button id="loginButton" type="submit">Log In</button>
+            <p id="message" role="status" aria-live="polite"></p>
+        </form>
+
+        <a class="back-link" href="index.html">← Back to website</a>
+    </main>
+
+    <script>
+        const API_URL = "http://127.0.0.1:5000/api";
+
+        const form = document.getElementById("loginForm");
+        const message = document.getElementById("message");
+        const loginButton = document.getElementById("loginButton");
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            message.textContent = "";
+            loginButton.disabled = true;
+            loginButton.textContent = "Signing in...";
+
+            try {
+                const response = await fetch(`${API_URL}/auth/login`, {
+                    method: "POST",
+                    credentials: "include",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        username: form.username.value.trim(),
+                        password: form.password.value
+                    })
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.message || "Login failed.");
+                }
+
+                message.textContent = "Login successful! Checking session...";
+
+                const sessionResponse = await fetch(`${API_URL}/auth/me`, {
+                    method: "GET",
+                    credentials: "include"
+                });
+
+                const sessionResult = await sessionResponse.json();
+
+                if (!sessionResponse.ok || !sessionResult.authenticated) {
+                    throw new Error("Login session could not be verified.");
+                }
+
+                message.textContent =
+                    "Login successful! Your admin session is active.";
+if (response.ok) {
+    window.location.href = "dashboard.html";
+    return;
+}
+                // Dashboard will be added in our next step.
+            } catch (error) {
+                message.textContent =
+                    error.message === "Failed to fetch"
+                        ? "Cannot connect to the server. Make sure the backend is running."
+                        : error.message;
+            } finally {
+                loginButton.disabled = false;
+                loginButton.textContent = "Log In";
+            }
+        });
+    </script>
+</body>
+</html>
