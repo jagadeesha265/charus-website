@@ -186,12 +186,11 @@
                     throw new Error("Login session could not be verified.");
                 }
 
-                message.textContent =
-                    "Login successful! Your admin session is active.";
-if (response.ok) {
-    window.location.href = "dashboard.html";
-    return;
-}
+        message.textContent =
+    "Login successful! Your admin session is active.";
+
+window.location.href = "dashboard.html";
+return;
                 // Dashboard will be added in our next step.
             } catch (error) {
                 message.textContent =
