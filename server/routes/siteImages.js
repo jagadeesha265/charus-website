@@ -8,11 +8,26 @@ const cloudinary = require("cloudinary").v2;
 
 const router = express.Router();
 
+// ================= CLOUDINARY CONFIGURATION =================
+
+const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
+const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+
+if (!cloudName || !apiKey || !apiSecret) {
+    console.error(
+        "Cloudinary configuration is missing required environment variables."
+    );
+}
+
 cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
+    cloud_name: cloudName,
+    api_key: apiKey,
+    api_secret: apiSecret,
+    secure: true
 });
+
+// ================= IMAGE UPLOAD CONFIGURATION =================
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -37,6 +52,8 @@ const upload = multer({
     }
 });
 
+// ================= ADMIN AUTHENTICATION =================
+
 function requireAdmin(req, res, next) {
     if (!req.session || !req.session.adminId) {
         return res.status(401).json({
@@ -46,6 +63,8 @@ function requireAdmin(req, res, next) {
 
     next();
 }
+
+// ================= DATABASE HELPERS =================
 
 function getBucket() {
     if (!mongoose.connection.db) {
@@ -64,6 +83,8 @@ function getCloudImageCollection() {
 
     return mongoose.connection.db.collection("siteImageRecords");
 }
+
+// ================= IMAGE FORMATTING =================
 
 function formatGridFSImage(file) {
     return {
@@ -86,6 +107,8 @@ function formatCloudImage(file) {
     };
 }
 
+// ================= CLOUDINARY UPLOAD =================
+
 function uploadToCloudinary(file, category) {
     return new Promise((resolve, reject) => {
         const safeName = file.originalname
@@ -93,20 +116,35 @@ function uploadToCloudinary(file, category) {
             .replace(/[^a-zA-Z0-9_-]/g, "_")
             .slice(-80) || "image";
 
+        const publicId =
+            `${Date.now()}-${Math.random()
+                .toString(36)
+                .slice(2, 10)}-${safeName}`;
+
         const stream = cloudinary.uploader.upload_stream(
             {
                 folder: "charus-website",
                 resource_type: "image",
-                format: undefined,
-                public_id: `${Date.now()}-${Math.random()
-                    .toString(36).slice(2, 10)}-${safeName}`,
+                public_id: publicId,
                 context: {
                     category
                 }
             },
             (error, result) => {
                 if (error) {
+                    console.error("Cloudinary upload failed:", {
+                        message: error.message,
+                        http_code: error.http_code,
+                        name: error.name
+                    });
+
                     return reject(error);
+                }
+
+                if (!result || !result.secure_url || !result.public_id) {
+                    return reject(
+                        new Error("Cloudinary returned an incomplete upload result.")
+                    );
                 }
 
                 resolve(result);
@@ -116,6 +154,8 @@ function uploadToCloudinary(file, category) {
         Readable.from([file.buffer]).pipe(stream);
     });
 }
+
+// ================= LIST ALL IMAGES =================
 
 async function listImages() {
     const bucket = getBucket();
@@ -130,11 +170,13 @@ async function listImages() {
         ...gridFiles.map(formatGridFSImage),
         ...cloudFiles.map(formatCloudImage)
     ].sort((a, b) =>
-        new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0)
+        new Date(b.uploadedAt || 0) -
+        new Date(a.uploadedAt || 0)
     );
 }
 
-// ADMIN: List uploaded images.
+// ================= ADMIN: LIST IMAGES =================
+
 router.get("/", requireAdmin, async (req, res, next) => {
     try {
         res.json({
@@ -145,7 +187,8 @@ router.get("/", requireAdmin, async (req, res, next) => {
     }
 });
 
-// PUBLIC: List images for the website.
+// ================= PUBLIC: LIST IMAGES =================
+
 router.get("/public", async (req, res, next) => {
     try {
         res.set("Cache-Control", "no-store");
@@ -158,7 +201,8 @@ router.get("/public", async (req, res, next) => {
     }
 });
 
-// ADMIN: Upload images to My Works or Gallery using Cloudinary.
+// ================= ADMIN: UPLOAD IMAGES =================
+
 router.post(
     "/upload",
     requireAdmin,
@@ -178,7 +222,14 @@ router.post(
             });
         }
 
-        const collection = getCloudImageCollection();
+        let collection;
+
+        try {
+            collection = getCloudImageCollection();
+        } catch (error) {
+            return next(error);
+        }
+
         const uploadedAssets = [];
         const savedIds = [];
 
@@ -204,37 +255,49 @@ router.post(
                 savedIds.push(insertResult.insertedId);
             }
 
-            res.status(201).json({
+            return res.status(201).json({
                 message: `${savedIds.length} image(s) uploaded successfully.`,
                 uploadedCount: savedIds.length
             });
         } catch (error) {
-            // Remove records and Cloudinary assets created by this request
-            // if any part of the upload fails.
+            // Roll back database records created by this request.
             await Promise.all(
                 savedIds.map(async id => {
                     try {
                         await collection.deleteOne({ _id: id });
-                    } catch (_) {}
+                    } catch (cleanupError) {
+                        console.error(
+                            "Could not remove image database record:",
+                            cleanupError.message
+                        );
+                    }
                 })
             );
 
+            // Remove Cloudinary assets created by this request.
             await Promise.all(
                 uploadedAssets.map(async publicId => {
                     try {
                         await cloudinary.uploader.destroy(publicId);
-                    } catch (_) {}
+                    } catch (cleanupError) {
+                        console.error(
+                            "Could not remove Cloudinary asset:",
+                            cleanupError.message
+                        );
+                    }
                 })
             );
 
-            next(error);
+            return next(error);
         }
     }
 );
 
-// PUBLIC: Display an image by its ID.
+// ================= PUBLIC: DISPLAY AN IMAGE =================
+
 // Cloudinary images redirect to their secure URL.
 // Older GridFS images continue to stream from MongoDB.
+
 router.get("/image/:id", async (req, res, next) => {
     try {
         if (!mongoose.isValidObjectId(req.params.id)) {
@@ -268,6 +331,7 @@ router.get("/image/:id", async (req, res, next) => {
         }
 
         const file = files[0];
+
         const allowedTypes = [
             "image/jpeg",
             "image/png",
@@ -302,7 +366,8 @@ router.get("/image/:id", async (req, res, next) => {
     }
 });
 
-// ADMIN: Delete either a Cloudinary image or an older GridFS image.
+// ================= ADMIN: DELETE AN IMAGE =================
+
 router.delete("/:id", requireAdmin, async (req, res, next) => {
     try {
         if (!mongoose.isValidObjectId(req.params.id)) {
@@ -313,6 +378,7 @@ router.delete("/:id", requireAdmin, async (req, res, next) => {
 
         const id = new mongoose.Types.ObjectId(req.params.id);
         const collection = getCloudImageCollection();
+
         const cloudImage = await collection.findOne({ _id: id });
 
         if (cloudImage) {
@@ -336,7 +402,7 @@ router.delete("/:id", requireAdmin, async (req, res, next) => {
 
         await bucket.delete(id);
 
-        res.json({
+        return res.json({
             message: "Image deleted successfully."
         });
     } catch (error) {
@@ -344,7 +410,8 @@ router.delete("/:id", requireAdmin, async (req, res, next) => {
     }
 });
 
-// Handle upload and image errors.
+// ================= ERROR HANDLER =================
+
 router.use((error, req, res, next) => {
     if (res.headersSent) {
         return next(error);
@@ -368,9 +435,13 @@ router.use((error, req, res, next) => {
         });
     }
 
-    console.error("Site image error:", error);
+    console.error("Site image error:", {
+        message: error.message,
+        name: error.name,
+        http_code: error.http_code
+    });
 
-    res.status(500).json({
+    return res.status(500).json({
         message: "Could not process the image request."
     });
 });
