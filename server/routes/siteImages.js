@@ -4,8 +4,15 @@ const mongoose = require("mongoose");
 const { GridFSBucket } = require("mongodb");
 const multer = require("multer");
 const { Readable } = require("stream");
+const cloudinary = require("cloudinary").v2;
 
 const router = express.Router();
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -30,7 +37,6 @@ const upload = multer({
     }
 });
 
-// Check whether the user is logged in as admin.
 function requireAdmin(req, res, next) {
     if (!req.session || !req.session.adminId) {
         return res.status(401).json({
@@ -41,7 +47,6 @@ function requireAdmin(req, res, next) {
     next();
 }
 
-// Connect to the GridFS image storage.
 function getBucket() {
     if (!mongoose.connection.db) {
         throw new Error("Database is not connected.");
@@ -52,8 +57,15 @@ function getBucket() {
     });
 }
 
-// Convert database image records into safe response objects.
-function formatImage(file) {
+function getCloudImageCollection() {
+    if (!mongoose.connection.db) {
+        throw new Error("Database is not connected.");
+    }
+
+    return mongoose.connection.db.collection("siteImageRecords");
+}
+
+function formatGridFSImage(file) {
     return {
         _id: file._id.toString(),
         filename: file.filename,
@@ -63,38 +75,90 @@ function formatImage(file) {
     };
 }
 
-// 1. ADMIN: List all uploaded images.
+function formatCloudImage(file) {
+    return {
+        _id: file._id.toString(),
+        filename: file.filename,
+        category: file.category || "gallery",
+        contentType: file.contentType || "image/jpeg",
+        uploadedAt: file.uploadedAt,
+        storage: "cloudinary"
+    };
+}
+
+function uploadToCloudinary(file, category) {
+    return new Promise((resolve, reject) => {
+        const safeName = file.originalname
+            .replace(/\.[^.]+$/, "")
+            .replace(/[^a-zA-Z0-9_-]/g, "_")
+            .slice(-80) || "image";
+
+        const stream = cloudinary.uploader.upload_stream(
+            {
+                folder: "charus-website",
+                resource_type: "image",
+                format: undefined,
+                public_id: `${Date.now()}-${Math.random()
+                    .toString(36).slice(2, 10)}-${safeName}`,
+                context: {
+                    category
+                }
+            },
+            (error, result) => {
+                if (error) {
+                    return reject(error);
+                }
+
+                resolve(result);
+            }
+        );
+
+        Readable.from([file.buffer]).pipe(stream);
+    });
+}
+
+async function listImages() {
+    const bucket = getBucket();
+    const cloudCollection = getCloudImageCollection();
+
+    const [gridFiles, cloudFiles] = await Promise.all([
+        bucket.find({}).toArray(),
+        cloudCollection.find({}).toArray()
+    ]);
+
+    return [
+        ...gridFiles.map(formatGridFSImage),
+        ...cloudFiles.map(formatCloudImage)
+    ].sort((a, b) =>
+        new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0)
+    );
+}
+
+// ADMIN: List uploaded images.
 router.get("/", requireAdmin, async (req, res, next) => {
     try {
-        const bucket = getBucket();
-        const files = await bucket.find({}).toArray();
-
         res.json({
-            images: files.map(formatImage)
+            images: await listImages()
         });
     } catch (error) {
         next(error);
     }
 });
 
-// 2. PUBLIC: List images for the public website.
-// No admin login is required for this endpoint.
+// PUBLIC: List images for the website.
 router.get("/public", async (req, res, next) => {
     try {
-        const bucket = getBucket();
-        const files = await bucket.find({}).toArray();
-
         res.set("Cache-Control", "no-store");
 
         res.json({
-            images: files.map(formatImage)
+            images: await listImages()
         });
     } catch (error) {
         next(error);
     }
 });
 
-// 3. ADMIN: Upload images to My Works or Gallery.
+// ADMIN: Upload images to My Works or Gallery using Cloudinary.
 router.post(
     "/upload",
     requireAdmin,
@@ -114,47 +178,52 @@ router.post(
             });
         }
 
-        const bucket = getBucket();
-        const uploadedIds = [];
+        const collection = getCloudImageCollection();
+        const uploadedAssets = [];
+        const savedIds = [];
 
         try {
             for (const file of req.files) {
-                const safeName = file.originalname
-                    .replace(/[^a-zA-Z0-9._-]/g, "_")
-                    .slice(-100);
+                const result = await uploadToCloudinary(file, category);
 
-                const stream = bucket.openUploadStream(safeName, {
-                    metadata: {
-                        category,
-                        contentType: file.mimetype
-                    }
-                });
+                uploadedAssets.push(result.public_id);
 
-                await new Promise((resolve, reject) => {
-                    stream.once("error", reject);
+                const document = {
+                    filename: file.originalname
+                        .replace(/[^a-zA-Z0-9._-]/g, "_")
+                        .slice(-100),
+                    category,
+                    contentType: file.mimetype,
+                    uploadedAt: new Date(),
+                    storage: "cloudinary",
+                    publicId: result.public_id,
+                    secureUrl: result.secure_url
+                };
 
-                    stream.once("finish", () => {
-                        uploadedIds.push(stream.id);
-                        resolve();
-                    });
-
-                    Readable.from(file.buffer).pipe(stream);
-                });
+                const insertResult = await collection.insertOne(document);
+                savedIds.push(insertResult.insertedId);
             }
 
             res.status(201).json({
-                message: `${uploadedIds.length} image(s) uploaded successfully.`,
-                uploadedCount: uploadedIds.length
+                message: `${savedIds.length} image(s) uploaded successfully.`,
+                uploadedCount: savedIds.length
             });
         } catch (error) {
-            // Clean up files uploaded by this request if it fails.
+            // Remove records and Cloudinary assets created by this request
+            // if any part of the upload fails.
             await Promise.all(
-                uploadedIds.map(async id => {
+                savedIds.map(async id => {
                     try {
-                        await bucket.delete(id);
-                    } catch (_) {
-                        // Ignore cleanup errors.
-                    }
+                        await collection.deleteOne({ _id: id });
+                    } catch (_) {}
+                })
+            );
+
+            await Promise.all(
+                uploadedAssets.map(async publicId => {
+                    try {
+                        await cloudinary.uploader.destroy(publicId);
+                    } catch (_) {}
                 })
             );
 
@@ -163,7 +232,9 @@ router.post(
     }
 );
 
-// 4. PUBLIC: Display an image using its ID.
+// PUBLIC: Display an image by its ID.
+// Cloudinary images redirect to their secure URL.
+// Older GridFS images continue to stream from MongoDB.
 router.get("/image/:id", async (req, res, next) => {
     try {
         if (!mongoose.isValidObjectId(req.params.id)) {
@@ -172,8 +243,22 @@ router.get("/image/:id", async (req, res, next) => {
             });
         }
 
-        const bucket = getBucket();
         const id = new mongoose.Types.ObjectId(req.params.id);
+        const collection = getCloudImageCollection();
+
+        const cloudImage = await collection.findOne({ _id: id });
+
+        if (cloudImage) {
+            if (!cloudImage.secureUrl) {
+                return res.status(404).json({
+                    message: "Image URL not found."
+                });
+            }
+
+            return res.redirect(302, cloudImage.secureUrl);
+        }
+
+        const bucket = getBucket();
         const files = await bucket.find({ _id: id }).toArray();
 
         if (!files.length) {
@@ -183,7 +268,6 @@ router.get("/image/:id", async (req, res, next) => {
         }
 
         const file = files[0];
-
         const allowedTypes = [
             "image/jpeg",
             "image/png",
@@ -218,7 +302,7 @@ router.get("/image/:id", async (req, res, next) => {
     }
 });
 
-// 5. ADMIN: Delete an uploaded image.
+// ADMIN: Delete either a Cloudinary image or an older GridFS image.
 router.delete("/:id", requireAdmin, async (req, res, next) => {
     try {
         if (!mongoose.isValidObjectId(req.params.id)) {
@@ -227,8 +311,21 @@ router.delete("/:id", requireAdmin, async (req, res, next) => {
             });
         }
 
-        const bucket = getBucket();
         const id = new mongoose.Types.ObjectId(req.params.id);
+        const collection = getCloudImageCollection();
+        const cloudImage = await collection.findOne({ _id: id });
+
+        if (cloudImage) {
+            await cloudinary.uploader.destroy(cloudImage.publicId);
+
+            await collection.deleteOne({ _id: id });
+
+            return res.json({
+                message: "Image deleted successfully."
+            });
+        }
+
+        const bucket = getBucket();
         const files = await bucket.find({ _id: id }).toArray();
 
         if (!files.length) {
