@@ -10,7 +10,7 @@ const referenceImage = document.getElementById("reference-image");
 const imagePreview = document.getElementById("image-preview");
 const bookingDate = document.getElementById("booking-date");
 
-const API_URL = "http://localhost:5000/api/bookings";
+const API_URL = "https://charus-website-5e4l.vercel.app/api/bookings";
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 const ALLOWED_IMAGE_TYPES = [
